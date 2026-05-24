@@ -72,11 +72,8 @@ async function handleEvent(event) {
                         await replyText(event.replyToken,
                                                   `🏷️ LINE Group ID ของกลุ่มนี้:\n\n${groupId}\n\nCopy ข้อความด้านบนแล้วนำไปวางในระบบ N Stock ครับ`
                                                 );
-              } else {
-                        await replyText(event.replyToken,
-                                                  '⚠️ คำสั่งนี้ใช้ได้เฉพาะในกลุ่มเท่านั้นครับ\nกรุณาพิมพ์ "groupid" ในกลุ่มที่ต้องการ'
-                                                );
-              }
+    // -- default: silent, bot responds to known commands only
+    // (removed default reply to prevent group spam)
               return;
       }
 
@@ -91,9 +88,6 @@ async function handleEvent(event) {
               return;
       }
 
-      await replyText(event.replyToken,
-                            'ส่ง "UID" เพื่อรับ LINE User ID สำหรับผูกกับระบบนับสต็อคครับ 😊'
-                          );
   }
 }
 
