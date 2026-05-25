@@ -1,4 +1,4 @@
-// ─── N Stock · LINE OA Webhook Server ──────────────────────────────────────────
+// ── N Stock · LINE OA Webhook Server ────────────────────────────────────────
 // Node.js + Express — deploy ได้เลยบน Render / Railway (free tier)
 //
 // คำสั่งรันในเครื่อง:
@@ -13,18 +13,27 @@ require('dotenv').config();
 
 const app = express();
 
-// ── ดึง raw body ก่อน parse JSON (จำเป็นสำหรับ verify signature) ─────────
+// ── CORS (อนุญาตทุก origin — internal tool) ──────────────────────────────────
+app.use((req, res, next) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, ngrok-skip-browser-warning, x-pospos-apikey');
+  if (req.method === 'OPTIONS') return res.sendStatus(204);
+  next();
+});
+
+// ── ดึง raw body ก่อน parse JSON (จำเป็นสำหรับ verify signature) ─────────────
 app.use('/webhook', express.raw({ type: 'application/json' }));
 app.use(express.json());
 
-// ── ENV VARS ──────────────────────────────────────────────────────
+// ── ENV VARS ─────────────────────────────────────────────────────────────────
 const {
   LINE_CHANNEL_SECRET,
   LINE_CHANNEL_ACCESS_TOKEN,
   PORT = 3000,
 } = process.env;
 
-// ── ตรวจ signature จาก LINE ──────────────────────────────────────
+// ── ตรวจ signature จาก LINE ──────────────────────────────────────────────────
 function verifySignature(rawBody, signature) {
   if (!LINE_CHANNEL_SECRET) return false;
   const hash = crypto
@@ -34,7 +43,7 @@ function verifySignature(rawBody, signature) {
   return hash === signature;
 }
 
-// ── ส่ง reply กลับไปใน LINE ────────────────────────────────────
+// ── ส่ง reply กลับไปใน LINE ──────────────────────────────────────────────────
 async function replyText(replyToken, text) {
   await axios.post(
     'https://api.line.me/v2/bot/message/reply',
@@ -62,12 +71,39 @@ async function pushText(userId, text) {
   );
 }
 
-// ── Health check ────────────────────────────────────────────────────────────
+// ── Health check ─────────────────────────────────────────────────────────────
 app.get('/', (_req, res) => res.send('N Stock LINE Bot ✅ running'));
 
-// ── Webhook endpoint ────────────────────────────────────────────────────────────
+// ── POSPOS API Proxy (แก้ CORS — browser เรียก POSPOS โดยตรงไม่ได้) ──────────
+// GET /api/pospos?path=stock/pagination&page=1&limit=20
+// Header: x-pospos-apikey: <apikey>
+const POSPOS_BASE = 'https://go.pospos.co/developer/api';
+
+app.get('/api/pospos', async (req, res) => {
+  const apikey = req.headers['x-pospos-apikey'];
+  if (!apikey) return res.status(401).json({ error: 'missing x-pospos-apikey header' });
+
+  const { path: posposPath, ...queryParams } = req.query;
+  if (!posposPath) return res.status(400).json({ error: 'missing path query param' });
+
+  const qs = new URLSearchParams(queryParams).toString();
+  const targetUrl = `${POSPOS_BASE}/${posposPath}${qs ? '?' + qs : ''}`;
+
+  try {
+    console.log(`[pospos-proxy] → ${targetUrl}`);
+    const response = await axios.get(targetUrl, { headers: { apikey } });
+    res.json(response.data);
+  } catch (err) {
+    const status = err.response?.status || 500;
+    const data   = err.response?.data   || { error: err.message };
+    console.error(`[pospos-proxy] ✕ ${status}`, data);
+    res.status(status).json(data);
+  }
+});
+
+// ── Webhook endpoint ──────────────────────────────────────────────────────────
 app.post('/webhook', async (req, res) => {
-  // LINE ต้องการ 200 เร็ว — ตอบก่อน แล้วค่อย process
+  // LINE ต้องการ 200 เร็ว ๆ — ตอบก่อน แล้วค่อย process
   res.json({ status: 'ok' });
 
   // Verify signature
@@ -95,11 +131,11 @@ app.post('/webhook', async (req, res) => {
   }
 });
 
-// ── จัดการแต่ละ event ─────────────────────────────────────────────────
+// ── จัดการแต่ละ event ────────────────────────────────────────────────────────
 async function handleEvent(event) {
   const userId = event.source?.userId;
 
-  // ─ follow: เพิ่มเพื่อน ───────────────────────────────────────────────────────────────────
+  // ─ follow: เพิ่มเพื่อน ─────────────────────────────────────────────────────
   if (event.type === 'follow') {
     await replyText(
       event.replyToken,
@@ -110,11 +146,11 @@ async function handleEvent(event) {
     return;
   }
 
-  // ─ message ──────────────────────────────────────────────────────────────────────────────
+  // ─ message ────────────────────────────────────────────────────────────────
   if (event.type === 'message' && event.message?.type === 'text') {
     const text = event.message.text.trim().toLowerCase();
 
-    // ── คำสั่ง: UID ──────────────────────────────────────────────────────────────────────────
+    // ── คำสั่ง: UID ──────────────────────────────────────────────────────────
     if (['uid', 'user id', 'userid', 'ยูไอดี'].includes(text)) {
       await replyText(
         event.replyToken,
@@ -124,7 +160,7 @@ async function handleEvent(event) {
       return;
     }
 
-    // ── คำสั่ง: GROUPID ──────────────────────────────────────────────────────────────────────
+    // ── คำสั่ง: GROUPID ──────────────────────────────────────────────────────
     if (['groupid', 'group id', 'กลุ่ม', '/groupid'].includes(text)) {
       const groupId = event.source?.groupId;
       if (groupId) {
@@ -142,7 +178,7 @@ async function handleEvent(event) {
       return;
     }
 
-    // ── คำสั่ง: help ─────────────────────────────────────────────────────────────────────────
+    // ── คำสั่ง: help ─────────────────────────────────────────────────────────
     if (['help', 'ช่วย', 'วิธีใช้', '?'].includes(text)) {
       await replyText(
         event.replyToken,
@@ -155,12 +191,12 @@ async function handleEvent(event) {
       return;
     }
 
-    // ── default: ไม่ตอบข้อความทั่วไป (กันสแปมในกลุ่ม) ─────────────────────
-    // บอตตอบเฉพาะคำสั่งที่รู้จักเท่านั้น
+    // ── default: ไม่ตอบข้อความทั่วไป (กันสแปมในกลุ่ม) ────────────────────────
+    // บอทตอบเฉพาะคำสั่งที่รู้จักเท่านั้น
   }
 }
 
-// ── Start ────────────────────────────────────────────────────────────────────────────────
+// ── Start ─────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
   console.log(`🚀 N Stock LINE Bot running on port ${PORT}`);
   if (!LINE_CHANNEL_SECRET || !LINE_CHANNEL_ACCESS_TOKEN) {
